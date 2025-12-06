@@ -1,0 +1,71 @@
+# ═══════════════════════════════════════════════════════════
+# GHOSTTY CONFIGURATION FOR EMACS
+# ═══════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────
+# KEYBOARD: Ctrl = C-, Option = M- (Meta for Emacs)
+# ─────────────────────────────────────────────────────────
+macos-option-as-alt = true
+# This makes Option key send Alt, which Emacs treats as Meta
+# Result: Option+x → M-x, Option+w → M-w, etc.
+
+# Fix Shift+Return keybinding - send actual newline
+keybind = shift+enter=text:\x0a
+
+# ─────────────────────────────────────────────────────────
+# FONT & RENDERING
+# ─────────────────────────────────────────────────────────
+font-family = JetBrains Mono
+font-size = 14
+font-feature = +calt    # Enable contextual alternates
+font-feature = +liga    # Enable ligatures (-> => !== etc.)
+font-thicken = true
+
+# ─────────────────────────────────────────────────────────
+# TERMINAL CAPABILITIES
+# ─────────────────────────────────────────────────────────
+term = xterm-ghostty
+shell-integration = zsh
+shell-integration-features = cursor,sudo,title
+
+# ─────────────────────────────────────────────────────────
+# THEME & COLORS (Auto-switch based on macOS appearance)
+# ─────────────────────────────────────────────────────────
+theme = "light:Catppuccin Latte,dark:TokyoNight"
+background-opacity = 1.0
+window-colorspace = srgb
+
+# Override colors for better CLI visibility in dark mode
+# Force "black" text to be lighter gray for readability
+palette = 0=#565f89
+palette = 8=#565f89
+
+# ─────────────────────────────────────────────────────────
+# CLIPBOARD & MOUSE
+# ─────────────────────────────────────────────────────────
+clipboard-read = allow
+clipboard-write = allow
+clipboard-trim-trailing-spaces = true
+mouse-hide-while-typing = true
+mouse-shift-capture = true
+
+# ─────────────────────────────────────────────────────────
+# WINDOW STYLE
+# ─────────────────────────────────────────────────────────
+window-padding-x = 4
+window-padding-y = 4
+window-decoration = true
+macos-titlebar-style = tabs
+macos-non-native-fullscreen = true
+
+# ─────────────────────────────────────────────────────────
+# CURSOR
+# ─────────────────────────────────────────────────────────
+cursor-style = block
+cursor-style-blink = false
+cursor-color = #fab387
+
+# ─────────────────────────────────────────────────────────
+# PERFORMANCE
+# ─────────────────────────────────────────────────────────
+resize-overlay = never
