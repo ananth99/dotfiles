@@ -1,7 +1,7 @@
 ;;; init.el --- Main configuration -*- lexical-binding: t -*-
 
 ;; Bootstrap Elpaca
-(defvar elpaca-installer-version 0.9)
+(defvar elpaca-installer-version 0.12)
 (defvar elpaca-directory (expand-file-name "elpaca/" user-emacs-directory))
 (defvar elpaca-builds-directory (expand-file-name "builds/" elpaca-directory))
 (defvar elpaca-repos-directory (expand-file-name "repos/" elpaca-directory))
@@ -118,6 +118,7 @@ The DWIM behaviour of this command is as follows:
              (message nil))
   :custom
   (inhibit-startup-screen t)
+  (initial-scratch-message nil)
   (initial-major-mode 'fundamental-mode))
 
 ;; Configure stuff that's present in native code
@@ -139,12 +140,13 @@ The DWIM behaviour of this command is as follows:
 
 (use-package jka-cmpr-hook
   :ensure nil
-  :hook (elpaca-after-init. auto-compression-mode))
+  :hook (elpaca-after-init . auto-compression-mode))
 
 ;; set fringe-mode to minimal
 (use-package fringe
   :ensure nil
-  :init (set-fringe-mode '(1 . 1)))
+  :config
+  (set-fringe-mode '(1 . 1)))
 
 (use-package display-line-numbers
   :ensure nil
@@ -180,9 +182,13 @@ The DWIM behaviour of this command is as follows:
   (when (display-graphic-p)
     (add-hook 'ns-system-appearance-change-functions #'apply-theme))
 
-  ;; Terminal: load dark theme by default
+  ;; Terminal: detect system appearance on startup
   (unless (display-graphic-p)
-    (load-theme dark-theme t)))
+    (let* ((output (shell-command-to-string "defaults read -g AppleInterfaceStyle 2>/dev/null"))
+           (is-dark (string-match-p "Dark" output)))
+      (if is-dark
+          (load-theme dark-theme t)
+        (load-theme light-theme t)))))
 
 (use-package ligature
   :ensure (ligature
@@ -208,7 +214,6 @@ The DWIM behaviour of this command is as follows:
   :hook (elpaca-after-init . mood-line-mode))
 
 (use-package which-key
-  :ensure nil
   :hook (elpaca-after-init . which-key-mode)
   :custom (which-key-show-transient-maps t)
   :config (which-key-setup-side-window-bottom))
@@ -238,20 +243,73 @@ The DWIM behaviour of this command is as follows:
   (scroll-margin 0)
   :config (ultra-scroll-mode 1))
 
-;; Terminal-specific settings
-(unless (display-graphic-p)
-  ;; Enable mouse support in terminal
-  (xterm-mouse-mode 1)
-  (global-set-key (kbd "<mouse-4>") 'scroll-down-line)
-  (global-set-key (kbd "<mouse-5>") 'scroll-up-line)
+(use-package clipetty
+  :if (and (not (display-graphic-p))
+           (not (eq system-type 'darwin)))
+  :hook (after-init . global-clipetty-mode))
 
-  ;; Better terminal colors
-  (setq xterm-set-window-title t)
+(defun am/setup-terminal-clipboard (&optional frame)
+  "Configure reliable clipboard integration for terminal FRAME."
+  (unless (display-graphic-p frame)
+    ;; Enable mouse support in terminal
+    (xterm-mouse-mode 1)
+    (global-set-key (kbd "<mouse-4>") 'scroll-down-line)
+    (global-set-key (kbd "<mouse-5>") 'scroll-up-line)
 
-  ;; Clipboard integration
-  (setq select-enable-clipboard t
-        select-enable-primary t
-        save-interprogram-paste-before-kill t))
+    ;; Better terminal colors
+    (setq xterm-set-window-title t)
+
+    ;; Clipboard integration
+    (setq select-enable-clipboard t
+          select-enable-primary t
+          save-interprogram-paste-before-kill t)
+
+    ;; On macOS terminals, use system clipboard commands directly.
+    ;; This is more reliable than terminal escape-sequence clipboard bridges.
+    (when (and (eq system-type 'darwin)
+               (executable-find "pbcopy")
+               (executable-find "pbpaste"))
+      (setq interprogram-cut-function
+            (lambda (text &optional _push)
+              (let ((process-connection-type nil))
+                (let ((proc (start-process "pbcopy" nil "pbcopy")))
+                  (process-send-string proc text)
+                  (process-send-eof proc))))
+            interprogram-paste-function
+            (lambda ()
+              (string-trim-right (shell-command-to-string "pbpaste")))))))
+
+(defun am/pbcopy-on-kill-new (text &rest _)
+  "Mirror killed TEXT to macOS clipboard in terminal Emacs."
+  (when (and (not (display-graphic-p))
+             (eq system-type 'darwin)
+             (stringp text)
+             (executable-find "pbcopy"))
+    (let ((process-connection-type nil))
+      (let ((proc (start-process "pbcopy" nil "pbcopy")))
+        (process-send-string proc text)
+        (process-send-eof proc)))))
+
+(defun am/pbpaste-string ()
+  "Return current macOS clipboard text, or nil if unavailable."
+  (when (and (not (display-graphic-p))
+             (eq system-type 'darwin)
+             (executable-find "pbpaste"))
+    (string-trim-right (shell-command-to-string "pbpaste"))))
+
+(defun am/sync-kill-ring-from-pbpaste (&rest _)
+  "Sync kill-ring with macOS clipboard before paste commands."
+  (let ((clip (am/pbpaste-string)))
+    (when (and (stringp clip)
+               (not (string-empty-p clip)))
+      (kill-new clip))))
+
+;; Apply once at startup and again for any new terminal frames (daemon/client).
+(add-hook 'after-init-hook #'am/setup-terminal-clipboard)
+(add-hook 'after-make-frame-functions #'am/setup-terminal-clipboard)
+(advice-add 'kill-new :after #'am/pbcopy-on-kill-new)
+(advice-add 'yank :before #'am/sync-kill-ring-from-pbpaste)
+(advice-add 'yank-pop :before #'am/sync-kill-ring-from-pbpaste)
 
 (use-package orderless
   :custom
@@ -453,7 +511,6 @@ The DWIM behaviour of this command is as follows:
  (use-package dumb-jump
    :init (add-hook 'xref-backend-functions #'dumb-jump-xref-activate)
    :custom
-   (dumb-jump-default-project "~/BitGo")
    (dumb-jump-selector 'completing-read)
    (dumb-jump-force-searcher 'rg)
    (dumb-jump-prefer-searcher 'rg))
@@ -473,7 +530,7 @@ The DWIM behaviour of this command is as follows:
   :custom
   (golden-ratio-exclude-modes '("vundo-mode"
                               "which-key-mode"))
-  (golden-ratio-exlude-buffer-names '("*Warnings*"))
+  (golden-ratio-exclude-buffer-names '("*Warnings*"))
   :hook (elpaca-after-init . golden-ratio-mode))
 
 (use-package ace-window
@@ -584,7 +641,6 @@ The DWIM behaviour of this command is as follows:
 (use-package org
   :ensure nil
   :custom
-  (org-agenda-files (quote ("~/BitGo/.jira")))
   (org-hide-emphasis-markers t))
 
 (use-package org-modern
@@ -597,64 +653,117 @@ The DWIM behaviour of this command is as follows:
   :config
   (add-hook 'org-mode-hook #'org-modern-indent-mode 90))
 
-(use-package org-jira
-  :config
-  (setq jiralib-url "https://bitgoinc.atlassian.net")
-  (setq org-jira-working-dir "~/BitGo/.jira"))
-
 ;; polyglot setup
 (use-package zig-mode)
 (use-package nix-mode)
 (use-package fountain-mode)
+(use-package typescript-mode)
 
 (use-package treesit
   :ensure nil
   :init
-  ;; Associate file extensions with tree-sitter modes
-  (add-to-list 'auto-mode-alist '("\\.ts\\'" . typescript-ts-mode))
-  (add-to-list 'auto-mode-alist '("\\.tsx\\'" . tsx-ts-mode))
-  (add-to-list 'auto-mode-alist '("\\.js\\'" . js-ts-mode))
-  (add-to-list 'auto-mode-alist '("\\.jsx\\'" . js-ts-mode))
-  (add-to-list 'auto-mode-alist '("\\.json\\'" . json-ts-mode))
-  (add-to-list 'auto-mode-alist '("\\.ya?ml\\'" . yaml-ts-mode))
-
   (setq treesit-language-source-alist
-        '((css . ("git@github.com:tree-sitter/tree-sitter-css.git"))
-          (dockerfile . ("git@github.com:camdencheek/tree-sitter-dockerfile.git"))
-          (go . ("git@github.com:tree-sitter/tree-sitter-go.git"))
-          (html . ("git@github.com:tree-sitter/tree-sitter-html.git"))
-          (javascript . ("git@github.com:tree-sitter/tree-sitter-javascript.git"))
-          (json . ("git@github.com:tree-sitter/tree-sitter-json.git"))
-          (nix . ("git@github.com:nix-community/tree-sitter-nix.git"))
-          (typescript . ("git@github.com:tree-sitter/tree-sitter-typescript.git" "master" "typescript/src"))
-          (tsx . ("git@github.com:tree-sitter/tree-sitter-typescript.git" "master" "tsx/src"))
-          (ruby . ("git@github.com:tree-sitter/tree-sitter-ruby.git"))
-          (python . ("git@github.com:tree-sitter/tree-sitter-python.git"))
-          (yaml . ("git@github.com:ikatyang/tree-sitter-yaml.git"))
-          (zig . ("git@github.com:tree-sitter-grammars/tree-sitter-zig.git"))))
+        '((css . ("https://github.com/tree-sitter/tree-sitter-css"))
+          (dockerfile . ("https://github.com/camdencheek/tree-sitter-dockerfile"))
+          (go . ("https://github.com/tree-sitter/tree-sitter-go"))
+          (html . ("https://github.com/tree-sitter/tree-sitter-html"))
+          (javascript . ("https://github.com/tree-sitter/tree-sitter-javascript"))
+          (json . ("https://github.com/tree-sitter/tree-sitter-json"))
+          (nix . ("https://github.com/nix-community/tree-sitter-nix"))
+          (typescript . ("https://github.com/tree-sitter/tree-sitter-typescript" "master" "typescript/src"))
+          (tsx . ("https://github.com/tree-sitter/tree-sitter-typescript" "master" "tsx/src"))
+          (ruby . ("https://github.com/tree-sitter/tree-sitter-ruby"))
+          (python . ("https://github.com/tree-sitter/tree-sitter-python"))
+          (yaml . ("https://github.com/ikatyang/tree-sitter-yaml"))
+          (zig . ("https://github.com/tree-sitter-grammars/tree-sitter-zig"))))
   :config
-  (defun treesit-install-all-grammars ()
+  (defconst am/treesit-required-languages
+    '(css dockerfile go html javascript json nix python ruby tsx typescript yaml zig))
+
+  (defun am/treesit-ready-p (language)
+    "Return non-nil when LANGUAGE grammar is available."
+    (and (fboundp 'treesit-available-p)
+         (treesit-available-p)
+         (treesit-language-available-p language)))
+
+  (defun am/treesit-toolchain-ready-p ()
+    "Return non-nil when local tools can build grammars."
+    (and (executable-find "git")
+         (or (executable-find "cc")
+             (executable-find "clang")
+             (executable-find "gcc"))))
+
+  (defun am/treesit-missing-languages ()
+    "Return configured grammars not yet available."
+    (seq-filter
+     (lambda (language) (not (am/treesit-ready-p language)))
+     am/treesit-required-languages))
+
+  (defun am/configure-treesit-modes ()
+    "Prefer tree-sitter modes for languages with installed grammars."
+    (setq auto-mode-alist
+          (seq-remove
+           (lambda (entry)
+             (member (cdr entry)
+                     '(typescript-ts-mode tsx-ts-mode js-ts-mode json-ts-mode yaml-ts-mode)))
+           auto-mode-alist))
+
+    (when (am/treesit-ready-p 'typescript)
+      (add-to-list 'auto-mode-alist '("\\.ts\\'" . typescript-ts-mode)))
+    (when (am/treesit-ready-p 'tsx)
+      (add-to-list 'auto-mode-alist '("\\.tsx\\'" . tsx-ts-mode)))
+    (when (am/treesit-ready-p 'javascript)
+      (add-to-list 'auto-mode-alist '("\\.js\\'" . js-ts-mode))
+      (add-to-list 'auto-mode-alist '("\\.jsx\\'" . js-ts-mode)))
+    (when (am/treesit-ready-p 'json)
+      (add-to-list 'auto-mode-alist '("\\.json\\'" . json-ts-mode)))
+    (when (am/treesit-ready-p 'yaml)
+      (add-to-list 'auto-mode-alist '("\\.ya?ml\\'" . yaml-ts-mode)))
+
+    (setq major-mode-remap-alist nil)
+    (when (am/treesit-ready-p 'yaml)
+      (add-to-list 'major-mode-remap-alist '(yaml-mode . yaml-ts-mode)))
+    (when (am/treesit-ready-p 'css)
+      (add-to-list 'major-mode-remap-alist '(css-mode . css-ts-mode)))
+    (when (am/treesit-ready-p 'typescript)
+      (add-to-list 'major-mode-remap-alist '(typescript-mode . typescript-ts-mode)))
+    (when (am/treesit-ready-p 'dockerfile)
+      (add-to-list 'major-mode-remap-alist '(dockerfile-mode . dockerfile-ts-mode)))
+    (when (am/treesit-ready-p 'javascript)
+      (add-to-list 'major-mode-remap-alist '(javascript-mode . js-ts-mode)))
+    (when (am/treesit-ready-p 'json)
+      (add-to-list 'major-mode-remap-alist '(json-mode . json-ts-mode)))
+    (when (am/treesit-ready-p 'ruby)
+      (add-to-list 'major-mode-remap-alist '(ruby-mode . ruby-ts-mode)))
+    (when (am/treesit-ready-p 'python)
+      (add-to-list 'major-mode-remap-alist '(python-mode . python-ts-mode)))
+    (when (am/treesit-ready-p 'html)
+      (add-to-list 'major-mode-remap-alist '(html-mode . html-ts-mode))))
+
+  (defun am/treesit-install-missing-grammars ()
+    "Install missing configured tree-sitter grammars."
     (interactive)
-    (dolist (lang treesit-language-source-alist)
-      (unless (treesit-language-available-p (car lang))
-        (treesit-install-language-grammar (car lang)))))
-  (treesit-install-all-grammars)
-  (setq major-mode-remap-alist
-        '((yaml-mode . yaml-ts-mode)
-          (css-mode . css-ts-mode)
-          (typescript-mode . typescript-ts-mode)
-          (dockerfile-mode . dockerfile-ts-mode)
-          (javascript-mode . js-ts-mode)
-          (json-mode . json-ts-mode)
-          (ruby-mode . ruby-ts-mode)
-          (python-mode . python-ts-mode)
-          (html-mode . html-ts-mode))))
+    (let ((missing (am/treesit-missing-languages)))
+      (when missing
+        (unless (am/treesit-toolchain-ready-p)
+          (user-error "Missing git/compiler toolchain for tree-sitter grammar builds"))
+        (message "Installing tree-sitter grammars: %s"
+                 (mapconcat #'symbol-name missing ", "))
+        (dolist (language missing)
+          (treesit-install-language-grammar language))
+        (am/configure-treesit-modes)
+        (message "Tree-sitter grammars installed"))))
+
+  (setq treesit-font-lock-level 4)
+  (am/configure-treesit-modes)
+  (add-hook 'elpaca-after-init #'am/treesit-install-missing-grammars))
 
 (use-package eglot
   :ensure nil
   :init
   (fset #'jsonrpc--log-event #'ignore)
   :hook
+  (typescript-mode . eglot-ensure)
   (typescript-ts-mode . eglot-ensure)
   (tsx-ts-mode . eglot-ensure)
   (go-ts-mode . eglot-ensure)
@@ -664,14 +773,16 @@ The DWIM behaviour of this command is as follows:
   (json-ts-mode . eglot-ensure)
   (yaml-ts-mode . eglot-ensure)
   (dockerfile-ts-mode . eglot-ensure)
-  (css-mode . eglot-ensure)
-  (html-mode . eglot-ensure)
+  (css-ts-mode . eglot-ensure)
+  (html-ts-mode . eglot-ensure)
   (zig-mode . eglot-ensure)
   :config
   (remove-hook 'eldoc-display-functions 'eldoc-display-in-echo-area)
-  (add-to-list 'eglot-server-programs
-               '(zig-mode . ("/Users/aarvay/Code/others/zls/zig-out/bin/zls"))
-               '(nix-mode . ("nil"))))
+  ;; Use servers discovered in PATH for portability across machines.
+  (when-let ((zls (executable-find "zls")))
+    (add-to-list 'eglot-server-programs `(zig-mode . (,zls))))
+  (when-let ((nil-ls (executable-find "nil")))
+    (add-to-list 'eglot-server-programs `(nix-mode . (,nil-ls)))))
 
 ;; Enhanced eglot configuration
 (with-eval-after-load 'eglot
@@ -695,106 +806,26 @@ The DWIM behaviour of this command is as follows:
   :ensure (apheleia
            :host github
            :repo "raxod502/apheleia")
+  :custom
+  ;; Defer indentation decisions to project formatter config (e.g. .prettierrc).
+  (apheleia-formatters-respect-indent-level nil)
   :hook (elpaca-after-init . apheleia-global-mode))
 
 ;; Project root detection
 (setq project-vc-extra-root-markers '(".git" "package.json" "tsconfig.json"))
 
-;; Discover all BitGo repositories
-(defun bitgo/discover-projects ()
-  "Add all BitGo repositories to known projects."
-  (interactive)
-  (let ((bitgo-dir (expand-file-name "~/BitGo")))
-    (when (file-directory-p bitgo-dir)
-      (dolist (dir (directory-files bitgo-dir t "^[^.]"))
-        (when (and (file-directory-p dir)
-                   (file-directory-p (expand-file-name ".git" dir)))
-          (project-remember-project (project-current nil dir)))))))
-
-;; Run on startup
-(add-hook 'after-init-hook #'bitgo/discover-projects)
-
-;; Quick switch to BitGo project
-(defun bitgo/switch-project ()
-  "Switch to a BitGo project with completion."
-  (interactive)
-  (let ((default-directory "~/BitGo/"))
-    (call-interactively #'project-switch-project)))
-
-(global-set-key (kbd "C-c p") #'bitgo/switch-project)
-
-;; Search across all BitGo repos
-(defun bitgo/search-all-repos (search-term)
-  "Search for SEARCH-TERM across all BitGo repositories using ripgrep."
-  (interactive "sSearch in all BitGo repos: ")
-  (let ((default-directory "~/BitGo/"))
-    (consult-ripgrep "~/BitGo/" search-term)))
-
-(global-set-key (kbd "C-c s") #'bitgo/search-all-repos)
-
-;; Find API handlers
-(defun bitgo/find-api-handler ()
-  "Search for API route handlers across BitGo repos."
-  (interactive)
-  (let ((default-directory "~/BitGo/"))
-    (consult-ripgrep "~/BitGo/"
-                    "(router\\.|app\\.|export.*handler|@(Get|Post|Put|Delete))"
-                    "-g '*.ts' -g '*.js'")))
-
-(global-set-key (kbd "C-c a") #'bitgo/find-api-handler)
-
-;; Find UI components (React hooks, components)
-(defun bitgo/find-component ()
-  "Search for React components and hooks across BitGo repos."
-  (interactive)
-  (let ((default-directory "~/BitGo/"))
-    (consult-ripgrep "~/BitGo/"
-                    "(export (function|const|default)|use[A-Z]|interface|type [A-Z])"
-                    "-g '*.tsx' -g '*.jsx' -g '*.ts'")))
-
-(global-set-key (kbd "C-c u") #'bitgo/find-component)
-
-;; Jump to specific BitGo repo
-(defun bitgo/jump-to-repo ()
-  "Jump to a specific BitGo repository."
-  (interactive)
-  (let* ((repos (directory-files "~/BitGo/" nil "^[^.]"))
-         (repo (completing-read "BitGo repo: " repos nil t)))
-    (dired (expand-file-name repo "~/BitGo/"))))
-
-(global-set-key (kbd "C-c j") #'bitgo/jump-to-repo)
-
-;; Toggle between test and source file
-(defun bitgo/toggle-test-file ()
-  "Toggle between test file and source file."
-  (interactive)
-  (let* ((current-file (buffer-file-name))
-         (is-test (string-match-p "\\.test\\." current-file))
-         (target-file (if is-test
-                         (replace-regexp-in-string "\\.test" "" current-file)
-                       (replace-regexp-in-string "\\(\\.[^.]+\\)$" ".test\\1" current-file))))
-    (if (file-exists-p target-file)
-        (find-file target-file)
-      (message "Test file not found: %s" target-file))))
-
-(global-set-key (kbd "C-c t") #'bitgo/toggle-test-file)
-
-;; Find related files (based on filename)
-(defun bitgo/find-related-files ()
-  "Find files related to current file in project."
-  (interactive)
-  (when-let* ((current-file (buffer-file-name))
-              (base-name (file-name-base current-file))
-              (project-root (project-root (project-current t))))
-    (consult-ripgrep project-root base-name)))
-
-(global-set-key (kbd "C-c r") #'bitgo/find-related-files)
+;; Generic project/search keybindings
+(global-set-key (kbd "C-c p") #'project-switch-project)
+(global-set-key (kbd "C-c s") #'consult-ripgrep)
+(global-set-key (kbd "C-c a") #'xref-find-definitions)
+(global-set-key (kbd "C-c u") #'project-find-regexp)
+(global-set-key (kbd "C-c j") #'project-dired)
+(global-set-key (kbd "C-c t") #'project-find-file)
+(global-set-key (kbd "C-c r") #'consult-project-buffer)
 
 (use-package autoinsert
   :ensure nil
   :hook (find-file . auto-insert))
-
-(use-package eldoc-box)
 
 ;;;; misc functions
 (defun find-user-config-file ()
@@ -814,6 +845,26 @@ Doesn't mess with special buffers."
      (delete (current-buffer) (seq-filter #'buffer-file-name (buffer-list))))))
 
 (define-key ctl-x-map "K" 'kill-other-buffers)
+
+(defun am/show-emacs-cheatsheet ()
+  "Show the Emacs command cheat sheet in a pinned side window."
+  (interactive)
+  (let* ((file "/Users/ananthmadhavan/Code/emacs-commands-cheatsheet.md")
+         (buffer (find-file-noselect file))
+         (window (display-buffer-in-side-window
+                  buffer
+                  '((side . right)
+                    (slot . 0)
+                    (window-width . 0.33)))))
+    (with-current-buffer buffer
+      (read-only-mode 1)
+      (visual-line-mode 1)
+      (when (fboundp 'markdown-view-mode)
+        (markdown-view-mode 1)))
+    (set-window-dedicated-p window t)
+    (select-window window)))
+
+(global-set-key (kbd "C-c e") #'am/show-emacs-cheatsheet)
 
 ;; bring all the LLMs to emacs
 (use-package gptel

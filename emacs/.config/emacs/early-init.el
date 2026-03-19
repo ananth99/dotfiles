@@ -41,7 +41,9 @@
   (setq command-line-x-option-alist nil))
 
 ;; Native compilation cache
-(when (fboundp 'startup-redirect-eln-cache)
+;; Emacs 30 can expose the function before native-comp state is initialized.
+(when (and (fboundp 'startup-redirect-eln-cache)
+           (boundp 'native-comp-eln-load-path))
   (startup-redirect-eln-cache
    (expand-file-name "~/.cache/emacs/")))
 

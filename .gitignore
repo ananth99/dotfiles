@@ -2,3 +2,6 @@
 *.dylib
 *.so
 *.dll
+
+# Emacs package manager state (machine-local)
+emacs/.config/emacs/elpaca/
